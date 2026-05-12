@@ -1,6 +1,9 @@
+import re
 import time
 import librosa
 import threading
+import webbrowser
+import subprocess
 import sounddevice as sd
 from queue import Queue
 from playsound import playsound
@@ -12,7 +15,10 @@ from pydantic import BaseModel
 # Note keep this at the bottom to avoid errors. Or fix it and submit a PR
 from stt.whisper.transcribe import FastTranscriber
 
-master = "You are a helpful assistant designed to run offline with decent latency, you are open source. Answer the following input from the user in no more than three sentences. Address them as Sir at all times. Only respond with the dialogue, nothing else."
+master = """You are a helpful assistant designed to run offline with decent latency, you are open source. Answer the following input from the user in no more than three sentences. Address them as Sir at all times. Only respond with the dialogue, nothing else.
+If the user asks you to open maps, include <action>open_maps</action> in your response.
+If the user asks you to open news, include <action>open_news</action> in your response.
+If the user asks you to build a code project or write code, include the bash commands to create the project inside a <bash>...</bash> block in your response."""
 
 
 class ChatMLMessage(BaseModel):
@@ -103,7 +109,41 @@ class Client:
                     )
                     self.addToHistory(response, "assistant")
 
-                    self.speak(response)
+                    cleaned_response = self.parse_and_execute(response)
+
+                    if cleaned_response:
+                        self.speak(cleaned_response)
+                    else:
+                        self.toggleListening()
+
+    def parse_and_execute(self, response: str) -> str:
+        # Extract and execute actions
+        actions = re.findall(r'<action>(.*?)</action>', response)
+        for action in actions:
+            if action == 'open_maps':
+                print("\033[35mExecuting action: open_maps\033[0m")
+                webbrowser.open("https://maps.google.com")
+            elif action == 'open_news':
+                print("\033[35mExecuting action: open_news\033[0m")
+                webbrowser.open("https://news.google.com")
+
+        # Extract and execute bash blocks
+        bash_blocks = re.findall(r'<bash>(.*?)</bash>', response, re.DOTALL)
+        for bash_script in bash_blocks:
+            print(f"\033[35mI would like to run the following bash script:\n{bash_script}\033[0m")
+            user_input = input("Should I proceed? (y/n): ")
+            if user_input.lower().strip() == 'y':
+                try:
+                    subprocess.Popen(bash_script, shell=True)
+                except Exception as e:
+                    print(f"\033[31mError executing bash script: {e}\033[0m")
+            else:
+                print("\033[33mCommand cancelled by user.\033[0m")
+
+        # Clean the response to be spoken
+        cleaned_response = re.sub(r'<action>.*?</action>', '', response)
+        cleaned_response = re.sub(r'<bash>.*?</bash>', '', cleaned_response, flags=re.DOTALL)
+        return cleaned_response.strip()
 
     def speak(self, text):
         data = self.tts.tts_to_file(
